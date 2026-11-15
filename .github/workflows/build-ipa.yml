@@ -1,16 +1,13 @@
-name: Build unsigned IPA
+name: Build TrollStore IPA
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
+    branches: [main, master]
 
 jobs:
   build:
     runs-on: macos-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,43 +17,25 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      - name: Find Xcode project
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Find Xcode project and scheme
         id: project
         shell: bash
         run: |
           PROJECT_PATH="$(find . -type d -name 'StorefrontSwitcher.xcodeproj' -print -quit)"
-          if [ -z "$PROJECT_PATH" ]; then
-            echo "Не найден StorefrontSwitcher.xcodeproj"
-            exit 1
-          fi
-
-          PROJECT_DIR="$(dirname "$PROJECT_PATH")"
+          test -n "$PROJECT_PATH" || { echo "Project not found"; exit 1; }
+          SCHEME="$(xcodebuild -list -json -project "$PROJECT_PATH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["project"]["schemes"][0])')"
           echo "project_path=$PROJECT_PATH" >> "$GITHUB_OUTPUT"
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-          echo "Найден проект: $PROJECT_PATH"
-
-      - name: Detect scheme
-        id: scheme
-        shell: bash
-        run: |
-          PROJECT="${{ steps.project.outputs.project_path }}"
-          SCHEME="$(xcodebuild -list -json -project "$PROJECT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["project"]["schemes"][0])')"
-          if [ -z "$SCHEME" ]; then
-            echo "Не удалось определить Xcode scheme"
-            exit 1
-          fi
           echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
-          echo "Используется scheme: $SCHEME"
 
-      - name: Build app (unsigned)
+      - name: Build app
         shell: bash
         run: |
-          PROJECT="${{ steps.project.outputs.project_path }}"
-          SCHEME="${{ steps.scheme.outputs.scheme }}"
-
           xcodebuild \
-            -project "$PROJECT" \
-            -scheme "$SCHEME" \
+            -project "${{ steps.project.outputs.project_path }}" \
+            -scheme "${{ steps.project.outputs.scheme }}" \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
@@ -66,23 +45,27 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             build
 
-      - name: Package IPA
+      - name: Apply TrollStore entitlement and package
         shell: bash
         run: |
           APP_PATH="$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -type d -name '*.app' -print -quit)"
-          if [ -z "$APP_PATH" ]; then
-            echo "Собранное .app приложение не найдено"
-            exit 1
-          fi
+          test -n "$APP_PATH" || { echo "Built .app not found"; exit 1; }
+          APP_EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Info.plist")
+          test -f "$APP_PATH/$APP_EXECUTABLE" || { echo "Executable not found"; exit 1; }
+
+          ldid -SStorefrontSwitcher/TrollStore.entitlements "$APP_PATH/$APP_EXECUTABLE"
+          ldid -e "$APP_PATH/$APP_EXECUTABLE" > build/entitlements-applied.plist
+          plutil -lint build/entitlements-applied.plist
+          /usr/libexec/PlistBuddy -c 'Print :com.apple.private.security.no-sandbox' build/entitlements-applied.plist
 
           mkdir -p build/ipa/Payload
           cp -R "$APP_PATH" build/ipa/Payload/
           cd build/ipa
-          zip -r "$GITHUB_WORKSPACE/StorefrontSwitcher-unsigned.ipa" Payload
+          zip -r "$GITHUB_WORKSPACE/StorefrontSwitcher-TrollStore.ipa" Payload
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: StorefrontSwitcher-unsigned-IPA
-          path: StorefrontSwitcher-unsigned.ipa
+          name: StorefrontSwitcher-TrollStore-IPA
+          path: StorefrontSwitcher-TrollStore.ipa
           if-no-files-found: error
