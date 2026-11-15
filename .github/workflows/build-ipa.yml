@@ -1,9 +1,8 @@
-name: Build StorefrontSwitcher IPA
+name: Build unsigned iOS IPA
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -11,9 +10,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Show Xcode version
-        run: xcodebuild -version
+
+      - name: Select Xcode
+        run: |
+          XCODE_PATH=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -n "$XCODE_PATH" ]; then
+            sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+          fi
+          xcodebuild -version
+
       - name: Build unsigned iOS app
+        working-directory: StorefrontSwitcher
         run: |
           xcodebuild \
             -project StorefrontSwitcher.xcodeproj \
@@ -21,21 +28,23 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
-            -derivedDataPath build/DerivedData \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
             build
+
       - name: Package IPA
         run: |
-          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/StorefrontSwitcher.app"
-          test -d "$APP_PATH"
-          mkdir -p build/Payload
-          cp -R "$APP_PATH" build/Payload/
-          cd build
-          /usr/bin/ditto -c -k --sequesterRsrc --keepParent Payload StorefrontSwitcher.ipa
-      - name: Upload IPA
+          APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/StorefrontSwitcher.app"
+          test -d "$APP_PATH" || { echo "App bundle not found: $APP_PATH"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/"
+          cd "$RUNNER_TEMP"
+          /usr/bin/zip -qry StorefrontSwitcher.ipa Payload
+
+      - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: StorefrontSwitcher-IPA
-          path: build/StorefrontSwitcher.ipa
+          name: StorefrontSwitcher-unsigned-IPA
+          path: ${{ runner.temp }}/StorefrontSwitcher.ipa
           if-no-files-found: error
-          retention-days: 14
