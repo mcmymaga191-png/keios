@@ -1,0 +1,27 @@
+diff --git a/StorefrontSwitcher/ContentView.swift b/StorefrontSwitcher/ContentView.swift
+--- a/StorefrontSwitcher/ContentView.swift
++++ b/StorefrontSwitcher/ContentView.swift
+@@
+-        var actions = posix_spawn_file_actions_t()
+-        posix_spawn_file_actions_init(&actions)
++        var actions: posix_spawn_file_actions_t? = nil
++        let actionsStatus = posix_spawn_file_actions_init(&actions)
++        guard actionsStatus == 0 else {
++            close(pipeFD[0])
++            close(pipeFD[1])
++            return ("Could not initialize process file actions: \(String(cString: strerror(actionsStatus)))", false)
++        }
++
+         posix_spawn_file_actions_adddup2(&actions, pipeFD[1], STDOUT_FILENO)
+         posix_spawn_file_actions_adddup2(&actions, pipeFD[1], STDERR_FILENO)
+         posix_spawn_file_actions_addclose(&actions, pipeFD[0])
+@@
+-        if WIFEXITED(waitStatus) {
+-            let code = WEXITSTATUS(waitStatus)
++        // WIFEXITED / WEXITSTATUS are C macros and are not imported by Swift.
++        if (waitStatus & 0x7f) == 0 {
++            let code = (waitStatus >> 8) & 0xff
+             return ("\\(outputText)\\n\\nExit code: \\(code)", code == 0)
+         } else {
+             return ("\\(outputText)\\n\\nProcess did not exit normally.", false)
+         }
