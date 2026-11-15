@@ -19,11 +19,25 @@ jobs:
           fi
           xcodebuild -version
 
+      - name: Locate Xcode project
+        id: project
+        run: |
+          PROJECT_PATH=$(find . -type d -name 'StorefrontSwitcher.xcodeproj' -print -quit)
+          if [ -z "$PROJECT_PATH" ]; then
+            echo "ERROR: StorefrontSwitcher.xcodeproj was not found in the repository."
+            echo "Make sure you uploaded/extracted the project files, not just the workflow file."
+            exit 1
+          fi
+          PROJECT_DIR=$(dirname "$PROJECT_PATH")
+          echo "project_path=$PROJECT_PATH" >> "$GITHUB_OUTPUT"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo "Found Xcode project: $PROJECT_PATH"
+          xcodebuild -list -project "$PROJECT_PATH"
+
       - name: Build unsigned iOS app
-        working-directory: StorefrontSwitcher
         run: |
           xcodebuild \
-            -project StorefrontSwitcher.xcodeproj \
+            -project "${{ steps.project.outputs.project_path }}" \
             -scheme StorefrontSwitcher \
             -configuration Release \
             -sdk iphoneos \
