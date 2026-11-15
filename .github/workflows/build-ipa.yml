@@ -1,64 +1,88 @@
-name: Build unsigned iOS IPA
+name: Build unsigned IPA
 
 on:
-  push:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Select Xcode
-        run: |
-          XCODE_PATH=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -n 1)
-          if [ -n "$XCODE_PATH" ]; then
-            sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
-          fi
-          xcodebuild -version
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
 
-      - name: Locate Xcode project
+      - name: Find Xcode project
         id: project
+        shell: bash
         run: |
-          PROJECT_PATH=$(find . -type d -name 'StorefrontSwitcher.xcodeproj' -print -quit)
+          PROJECT_PATH="$(find . -type d -name 'StorefrontSwitcher.xcodeproj' -print -quit)"
           if [ -z "$PROJECT_PATH" ]; then
-            echo "ERROR: StorefrontSwitcher.xcodeproj was not found in the repository."
-            echo "Make sure you uploaded/extracted the project files, not just the workflow file."
+            echo "Не найден StorefrontSwitcher.xcodeproj"
             exit 1
           fi
-          PROJECT_DIR=$(dirname "$PROJECT_PATH")
+
+          PROJECT_DIR="$(dirname "$PROJECT_PATH")"
           echo "project_path=$PROJECT_PATH" >> "$GITHUB_OUTPUT"
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-          echo "Found Xcode project: $PROJECT_PATH"
-          xcodebuild -list -project "$PROJECT_PATH"
+          echo "Найден проект: $PROJECT_PATH"
 
-      - name: Build unsigned iOS app
+      - name: Detect scheme
+        id: scheme
+        shell: bash
         run: |
+          PROJECT="${{ steps.project.outputs.project_path }}"
+          SCHEME="$(xcodebuild -list -json -project "$PROJECT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["project"]["schemes"][0])')"
+          if [ -z "$SCHEME" ]; then
+            echo "Не удалось определить Xcode scheme"
+            exit 1
+          fi
+          echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
+          echo "Используется scheme: $SCHEME"
+
+      - name: Build app (unsigned)
+        shell: bash
+        run: |
+          PROJECT="${{ steps.project.outputs.project_path }}"
+          SCHEME="${{ steps.scheme.outputs.scheme }}"
+
           xcodebuild \
-            -project "${{ steps.project.outputs.project_path }}" \
-            -scheme StorefrontSwitcher \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
-            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
             build
 
       - name: Package IPA
+        shell: bash
         run: |
-          APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/StorefrontSwitcher.app"
-          test -d "$APP_PATH" || { echo "App bundle not found: $APP_PATH"; exit 1; }
-          mkdir -p "$RUNNER_TEMP/Payload"
-          cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/"
-          cd "$RUNNER_TEMP"
-          /usr/bin/zip -qry StorefrontSwitcher.ipa Payload
+          APP_PATH="$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [ -z "$APP_PATH" ]; then
+            echo "Собранное .app приложение не найдено"
+            exit 1
+          fi
+
+          mkdir -p build/ipa/Payload
+          cp -R "$APP_PATH" build/ipa/Payload/
+          cd build/ipa
+          zip -r "$GITHUB_WORKSPACE/StorefrontSwitcher-unsigned.ipa" Payload
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: StorefrontSwitcher-unsigned-IPA
-          path: ${{ runner.temp }}/StorefrontSwitcher.ipa
+          path: StorefrontSwitcher-unsigned.ipa
           if-no-files-found: error
